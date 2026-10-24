@@ -1,0 +1,526 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  TECHNICIAN
+}
+
+enum UtilityType {
+  ELECTRICITY
+  WATER
+  BOTH
+  ALL
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum ReadingType {
+  ACTUAL
+  ESTIMATED
+  CUSTOMER_SUBMITTED
+}
+
+enum BillStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+}
+
+enum LineItemCategory {
+  FIXED
+  ENERGY_CONSUMPTION
+  TIER_SLAB
+  TAX_DUTY
+  SURCHARGE
+  SEWERAGE
+  REBATE
+  METER_RENT
+  ADJUSTMENT
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCESSFUL
+  FAILED
+  UNKNOWN
+}
+
+enum PaymentMethod {
+  UPI
+  CARD
+  NET_BANKING
+  AUTO_DEBIT
+}
+
+enum TicketCategory {
+  POWER_CUT
+  VOLTAGE_FLUCTUATION
+  INFRASTRUCTURE_DAMAGE
+  WATER_INTERRUPTION
+  LOW_PRESSURE
+  WATER_LEAKAGE
+  METER_PROBLEM
+  INCORRECT_BILL
+  PAYMENT_PROBLEM
+  OTHER
+}
+
+enum TicketStatus {
+  SUBMITTED
+  ACKNOWLEDGED
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum NotificationType {
+  BILL_GENERATED
+  BILL_DUE_SOON
+  PAYMENT_CONFIRMED
+  PAYMENT_UNCERTAIN
+  PAYMENT_FAILED
+  TICKET_ACKNOWLEDGED
+  TICKET_UPDATED
+  SERVICE_OUTAGE
+  SERVICE_RESTORED
+  ACCOUNT_NOTICE
+}
+
+enum AlertSeverity {
+  CRITICAL
+  WARNING
+  ADVISORY
+  INFO
+}
+
+enum AlertStatus {
+  ACTIVE
+  INVESTIGATING
+  RESTORED
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum ReconciliationStatus {
+  MATCHED
+  DISCREPANCY_RESOLVED
+  MANUAL_REVIEW_REQUIRED
+}
+
+model User {
+  id              String           @id @default(uuid())
+  email           String           @unique
+  passwordHash    String
+  name            String
+  phone           String?
+  role            Role             @default(CUSTOMER)
+  avatarUrl       String?
+  utilityAccounts UtilityAccount[]
+  serviceAddresses ServiceAddress[]
+  payments        Payment[]
+  tickets         ServiceTicket[]  @relation("CustomerTickets")
+  assignedTickets ServiceTicket[]  @relation("AssignedTickets")
+  ticketComments  TicketComment[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+  consents        ConsentRecord[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([email])
+  @@index([role])
+}
+
+model ServiceAddress {
+  id              String           @id @default(uuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  streetAddress   String
+  city            String
+  state           String
+  postalCode      String
+  landmark        String?
+  isPrimary       Boolean          @default(false)
+  utilityAccounts UtilityAccount[]
+  createdAt       DateTime         @default(now())
+
+  @@index([userId])
+}
+
+model TariffPlan {
+  id                 String           @id @default(uuid())
+  utilityType        UtilityType
+  name               String
+  code               String           @unique
+  version            Int              @default(1)
+  fixedChargeMonthly Decimal          @db.Decimal(10, 2)
+  taxRatePercent     Decimal          @db.Decimal(5, 2)
+  fuelSurchargeRate  Decimal          @default(0.00) @db.Decimal(5, 2)
+  sewerageRatePercent Decimal         @default(0.00) @db.Decimal(5, 2)
+  meterRentMonthly   Decimal          @default(0.00) @db.Decimal(10, 2)
+  description        String?
+  isActive           Boolean          @default(true)
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  tiers              TariffTier[]
+  utilityAccounts    UtilityAccount[]
+  createdAt          DateTime         @default(now())
+
+  @@index([utilityType, isActive])
+}
+
+model TariffTier {
+  id           String     @id @default(uuid())
+  tariffPlanId String
+  tariffPlan   TariffPlan @relation(fields: [tariffPlanId], references: [id], onDelete: Cascade)
+  tierOrder    Int
+  minUnits     Decimal    @db.Decimal(10, 2)
+  maxUnits     Decimal?   @db.Decimal(10, 2) // Nullable means unbounded upper tier
+  ratePerUnit  Decimal    @db.Decimal(10, 2)
+
+  @@index([tariffPlanId, tierOrder])
+}
+
+model UtilityAccount {
+  id               String          @id @default(uuid())
+  userId           String
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountNumber    String          @unique
+  utilityType      UtilityType
+  meterNumber      String          @unique
+  serviceAddressId String
+  serviceAddress   ServiceAddress  @relation(fields: [serviceAddressId], references: [id])
+  tariffPlanId     String
+  tariffPlan       TariffPlan      @relation(fields: [tariffPlanId], references: [id])
+  status           AccountStatus   @default(ACTIVE)
+  connectionDate   DateTime        @default(now())
+  meterReadings    MeterReading[]
+  bills            Bill[]
+  serviceTickets   ServiceTicket[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([accountNumber])
+  @@index([utilityType])
+}
+
+model MeterReading {
+  id               String         @id @default(uuid())
+  utilityAccountId String
+  utilityAccount   UtilityAccount @relation(fields: [utilityAccountId], references: [id], onDelete: Cascade)
+  readingDate      DateTime
+  previousReading  Decimal        @db.Decimal(10, 2)
+  currentReading   Decimal        @db.Decimal(10, 2)
+  unitsConsumed    Decimal        @db.Decimal(10, 2)
+  readingType      ReadingType    @default(ACTUAL)
+  meterPhotoUrl    String?
+  notes            String?
+  bill             Bill?
+  createdAt        DateTime       @default(now())
+
+  @@index([utilityAccountId, readingDate])
+}
+
+model Bill {
+  id                    String         @id @default(uuid())
+  utilityAccountId      String
+  utilityAccount        UtilityAccount @relation(fields: [utilityAccountId], references: [id], onDelete: Cascade)
+  billNumber            String         @unique
+  billingPeriodStart    DateTime
+  billingPeriodEnd      DateTime
+  dueDate               DateTime
+  issueDate             DateTime       @default(now())
+  meterReadingId        String?        @unique
+  meterReading          MeterReading?  @relation(fields: [meterReadingId], references: [id])
+  previousBillId        String?
+  previousBill          Bill?          @relation("BillComparison", fields: [previousBillId], references: [id])
+  nextBills             Bill[]         @relation("BillComparison")
+  unitsConsumed         Decimal        @db.Decimal(10, 2)
+  previousUnitsConsumed Decimal?       @db.Decimal(10, 2)
+  previousAmount        Decimal?       @db.Decimal(10, 2)
+  currentAmount         Decimal        @db.Decimal(10, 2)
+  fixedCharges          Decimal        @db.Decimal(10, 2)
+  energyCharges         Decimal        @db.Decimal(10, 2)
+  taxCharges            Decimal        @db.Decimal(10, 2)
+  otherCharges          Decimal        @default(0.00) @db.Decimal(10, 2)
+  rebateDiscount        Decimal        @default(0.00) @db.Decimal(10, 2)
+  totalAmountDue        Decimal        @db.Decimal(10, 2)
+  amountPaid            Decimal        @default(0.00) @db.Decimal(10, 2)
+  balanceRemaining      Decimal        @db.Decimal(10, 2)
+  status                BillStatus     @default(UNPAID)
+  pdfUrl                String?
+  notes                 String?
+  lineItems             BillLineItem[]
+  payments              Payment[]
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  @@index([utilityAccountId, issueDate])
+  @@index([billNumber])
+  @@index([status])
+}
+
+model BillLineItem {
+  id          String           @id @default(uuid())
+  billId      String
+  bill        Bill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  category    LineItemCategory
+  description String
+  quantity    Decimal?         @db.Decimal(10, 2)
+  rate        Decimal?         @db.Decimal(10, 2)
+  amount      Decimal          @db.Decimal(10, 2)
+  orderIndex  Int              @default(0)
+
+  @@index([billId, orderIndex])
+}
+
+model Payment {
+  id                     String                 @id @default(uuid())
+  internalReference      String                 @unique
+  billId                 String
+  bill                   Bill                   @relation(fields: [billId], references: [id], onDelete: Restrict)
+  userId                 String
+  user                   User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount                 Decimal                @db.Decimal(10, 2)
+  currency               String                 @default("INR")
+  paymentMethod          PaymentMethod          @default(UPI)
+  provider               String                 @default("RAZORPAY_SANDBOX")
+  providerTransactionRef String?
+  providerOrderId        String?
+  providerSignature      String?
+  status                 PaymentStatus          @default(PENDING)
+  failureReason          String?
+  idempotencyKey         String?                @unique
+  receiptNumber          String?                @unique
+  initiatedAt            DateTime               @default(now())
+  verifiedAt             DateTime?
+  updatedAt              DateTime               @updatedAt
+  statusEvents           PaymentStatusEvent[]
+  reconciliationRecord   ReconciliationRecord?
+
+  @@index([billId])
+  @@index([userId])
+  @@index([internalReference])
+  @@index([status])
+  @@index([providerTransactionRef])
+}
+
+model PaymentStatusEvent {
+  id           String        @id @default(uuid())
+  paymentId    String
+  payment      Payment       @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  fromStatus   PaymentStatus
+  toStatus     PaymentStatus
+  reason       String
+  triggeredBy  String        // 'CUSTOMER', 'WEBHOOK', 'RECONCILIATION_JOB', 'ADMIN'
+  metadataJson String?
+  createdAt    DateTime      @default(now())
+
+  @@index([paymentId, createdAt])
+}
+
+model WebhookEvent {
+  id           String        @id @default(uuid())
+  provider     String
+  eventId      String        @unique
+  eventType    String
+  payloadJson  String
+  signature    String?
+  status       WebhookStatus @default(RECEIVED)
+  errorMessage String?
+  processedAt  DateTime?
+  createdAt    DateTime      @default(now())
+
+  @@index([provider, eventType])
+  @@index([status])
+}
+
+model ReconciliationRecord {
+  id               String               @id @default(uuid())
+  paymentId        String               @unique
+  payment          Payment              @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  reconciliationDate DateTime           @default(now())
+  status           ReconciliationStatus @default(MATCHED)
+  providerStatus   String
+  internalStatus   String
+  notes            String?
+  reconciledBy     String               @default("SYSTEM_JOB")
+  createdAt        DateTime             @default(now())
+
+  @@index([status])
+}
+
+model ServiceTicket {
+  id                 String              @id @default(uuid())
+  ticketNumber       String              @unique
+  userId             String
+  user               User                @relation("CustomerTickets", fields: [userId], references: [id], onDelete: Cascade)
+  utilityAccountId   String?
+  utilityAccount     UtilityAccount?     @relation(fields: [utilityAccountId], references: [id])
+  utilityType        UtilityType
+  category           TicketCategory
+  description        String
+  serviceAddress     String
+  landmark           String?
+  contactPhone       String?
+  contactEmail       String?
+  contactPreference  String              @default("SMS")
+  photoUrl           String?
+  priority           TicketPriority      @default(MEDIUM)
+  status             TicketStatus        @default(SUBMITTED)
+  assignedToId       String?
+  assignedTo         User?               @relation("AssignedTickets", fields: [assignedToId], references: [id])
+  resolutionNotes    String?
+  resolvedAt         DateTime?
+  closedAt           DateTime?
+  statusEvents       TicketStatusEvent[]
+  comments           TicketComment[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([userId])
+  @@index([ticketNumber])
+  @@index([status])
+  @@index([category])
+  @@index([assignedToId])
+}
+
+model TicketStatusEvent {
+  id          String        @id @default(uuid())
+  ticketId    String
+  ticket      ServiceTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  fromStatus  TicketStatus
+  toStatus    TicketStatus
+  note        String
+  isPublic    Boolean       @default(true)
+  createdById String
+  createdAt   DateTime      @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+model TicketComment {
+  id         String        @id @default(uuid())
+  ticketId   String
+  ticket     ServiceTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorId   String
+  author     User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  authorName String
+  authorRole Role
+  comment    String
+  isInternal Boolean       @default(false)
+  createdAt  DateTime      @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+model Notification {
+  id               String           @id @default(uuid())
+  userId           String
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title            String
+  message          String
+  type             NotificationType
+  relatedBillId    String?
+  relatedPaymentId String?
+  relatedTicketId  String?
+  isRead           Boolean          @default(false)
+  readAt           DateTime?
+  createdAt        DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+}
+
+model ServiceAlert {
+  id                   String        @id @default(uuid())
+  title                String
+  message              String
+  utilityType          UtilityType   @default(ALL)
+  severity             AlertSeverity @default(INFO)
+  affectedAreas        String        // Comma separated or description
+  estimatedRestoration DateTime?
+  status               AlertStatus   @default(ACTIVE)
+  verifiedSource       String        // e.g. "Operations Control Center", "Water Works Board"
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@index([status, severity])
+}
+
+model SupportRequest {
+  id        String   @id @default(uuid())
+  name      String
+  email     String
+  phone     String?
+  subject   String
+  category  String
+  message   String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+
+  @@index([status])
+}
+
+model ConsentRecord {
+  id                String   @id @default(uuid())
+  userId            String?
+  user              User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  ipHash            String?
+  analyticsConsent  Boolean  @default(false)
+  functionalConsent Boolean  @default(true)
+  marketingConsent  Boolean  @default(false)
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userEmail   String?
+  action      String   // e.g. "USER_LOGIN", "TICKET_STATUS_CHANGED", "PAYMENT_RECONCILED"
+  entityType  String   // e.g. "BILL", "PAYMENT", "SERVICE_TICKET"
+  entityId    String?
+  detailsJson String?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
